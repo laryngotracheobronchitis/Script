@@ -1,0 +1,1390 @@
+if getgenv().SEWHExecuted then
+    return
+end
+getgenv().SEWHExecuted = true
+
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "S.E.W.H",
+    Author = "Made By YAR",
+    Folder = "SEWH",
+    Size = UDim2.fromOffset(580, 490),
+    Theme = "Dark",
+    HidePanelBackground = false,
+    NewElements = true,
+    Acrylic = false,
+    HideSearchBar = false,
+    SideBarWidth = 200,
+    OpenButton = {
+        Enabled = true,
+        Scale = 0.7
+    },
+})
+
+Window:DisableTopbarButtons({ "Fullscreen" })
+
+-- Services
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Camera = workspace.CurrentCamera
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+
+-- Anti-Cheat Bypass
+local getinfo = getinfo or debug.getinfo
+pcall(function()
+    setthreadidentity(2)
+    local Detected, Kill
+    for i, v in getgc(true) do
+        if typeof(v) == "table" then
+            local D = rawget(v, "Detected")
+            local K = rawget(v, "Kill")
+            if typeof(D) == "function" and not Detected then
+                Detected = D
+                hookfunction(D, function() return true end)
+            end
+            if rawget(v, "Variables") and rawget(v, "Process") and typeof(K) == "function" and not Kill then
+                Kill = K
+                hookfunction(K, function() end)
+            end
+        end
+    end
+    pcall(function()
+        hookfunction(getrenv().debug.info, newcclosure(function(...)
+            if Detected and (...) == Detected then
+                return coroutine.yield(coroutine.running())
+            end
+            return getinfo(...)
+        end))
+    end)
+    setthreadidentity(7)
+end)
+
+-- Global Config
+local GlobalConfig = {
+    VerticalOffset = 2.5,
+    TextSize = 11
+}
+
+-- Drawing Check
+local HasDrawing = false
+pcall(function()
+    local t = Drawing.new("Line")
+    t:Remove()
+    HasDrawing = true
+end)
+
+-- Utility Functions
+local function isBeam(obj)
+    if not obj then return false end
+    local n = string.lower(obj.Name or "")
+    if string.find(n, "beam") then return true end
+    return false
+end
+
+local function isTripmineWithMesh(obj)
+    if not obj then return false end
+    local n = string.lower(obj.Name or "")
+    if not string.find(n, "tripmine") and not string.find(n, "trip") and not string.find(n, "mine") then return false end
+    if obj:IsA("Model") then
+        local m = obj:FindFirstChildWhichIsA("MeshPart")
+        if m then return true end
+    end
+    return false
+end
+
+local function getAttachPart(obj)
+    if obj:IsA("BasePart") then return obj end
+    if obj:IsA("Model") then
+        local m = obj:FindFirstChildWhichIsA("MeshPart")
+        if m then return m end
+        local b = obj:FindFirstChildWhichIsA("BasePart")
+        if b then return b end
+    end
+    return nil
+end
+
+-- Module Loading
+local StaminaModule = nil
+local SprintModule = nil
+local EventHandler = nil
+local Announcement = nil
+
+local function loadModules()
+    pcall(function()
+        StaminaModule = require(ReplicatedStorage.Resources.Client.MovementHandler.Stamina)
+        SprintModule = require(ReplicatedStorage.Resources.Client.MovementHandler.Sprint)
+        EventHandler = require(ReplicatedStorage.Communication.EventHandler)
+        local ps = LocalPlayer:WaitForChild("PlayerScripts")
+        local ui = ps:WaitForChild("UiHandler")
+        local mod = ui:WaitForChild("Modules")
+        local notif = mod:WaitForChild("Notifications")
+        local logic = notif:WaitForChild("Logic")
+        Announcement = require(logic.Announcement)
+    end)
+end
+
+-- ========== PLACEABLES ESP ==========
+local PlaceablesConfig = { ESPEnabled = false, Color = Color3.fromRGB(0, 255, 0) }
+local trackedPlaceables = {}
+local placeablesLoop = nil
+
+local function isValidForPlaceables(obj)
+    if not obj or isBeam(obj) then return false end
+    local n = string.lower(obj.Name or "")
+    if string.find(n, "tripmine") or string.find(n, "trip") or string.find(n, "mine") then return isTripmineWithMesh(obj) end
+    if obj:IsA("Model") then return obj:FindFirstChildWhichIsA("BasePart") ~= nil end
+    return obj:IsA("BasePart")
+end
+
+local function createPlaceablesESP(obj)
+    if trackedPlaceables[obj] then return end
+    if not isValidForPlaceables(obj) then return end
+    local ap = getAttachPart(obj)
+    if not ap then return end
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ESP_Placeables"
+    bb.Size = UDim2.new(0, 200, 0, 30)
+    bb.AlwaysOnTop = true
+    bb.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset, 0)
+    bb.Enabled = PlaceablesConfig.ESPEnabled
+    bb.Parent = ap
+    local lb = Instance.new("TextLabel")
+    lb.Size = UDim2.new(1, 0, 1, 0)
+    lb.BackgroundTransparency = 1
+    lb.Text = obj.Name
+    lb.TextColor3 = PlaceablesConfig.Color
+    lb.TextSize = GlobalConfig.TextSize
+    lb.Font = Enum.Font.SourceSansBold
+    lb.TextStrokeTransparency = 0.3
+    lb.TextXAlignment = Enum.TextXAlignment.Center
+    lb.Parent = bb
+    trackedPlaceables[obj] = {billboard = bb, label = lb}
+end
+
+local function removePlaceablesESP(obj)
+    local d = trackedPlaceables[obj]
+    if d then pcall(function() d.billboard:Destroy() end) trackedPlaceables[obj] = nil end
+end
+
+local function updatePlaceablesColor()
+    for _, d in pairs(trackedPlaceables) do pcall(function() d.label.TextColor3 = PlaceablesConfig.Color end) end
+end
+
+local function updatePlaceablesSettings()
+    for _, d in pairs(trackedPlaceables) do pcall(function()
+        d.billboard.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset, 0)
+        d.billboard.Enabled = PlaceablesConfig.ESPEnabled
+        d.label.TextSize = GlobalConfig.TextSize
+        d.label.TextColor3 = PlaceablesConfig.Color
+    end) end
+end
+
+local function scanPlaceables()
+    if not PlaceablesConfig.ESPEnabled then
+        for _, d in pairs(trackedPlaceables) do pcall(function() d.billboard.Enabled = false end) end
+        return
+    end
+    local pl = workspace:FindFirstChild("Map")
+    if not pl then return end
+    local folder = pl:FindFirstChild("Placeables")
+    if not folder then for o in pairs(trackedPlaceables) do removePlaceablesESP(o) end return end
+    local cur = {}
+    for _, o in ipairs(folder:GetChildren()) do if isValidForPlaceables(o) then cur[o] = true end end
+    for o in pairs(cur) do if not trackedPlaceables[o] then createPlaceablesESP(o) end end
+    for o in pairs(trackedPlaceables) do if not cur[o] then removePlaceablesESP(o) end end
+end
+
+local function startPlaceables() if not placeablesLoop then placeablesLoop = RunService.RenderStepped:Connect(scanPlaceables) scanPlaceables() end end
+local function stopPlaceables() if placeablesLoop then placeablesLoop:Disconnect() placeablesLoop = nil end for o in pairs(trackedPlaceables) do removePlaceablesESP(o) end end
+
+-- ========== PROJECTILES ESP ==========
+local ProjectilesConfig = { ESPEnabled = false, Color = Color3.fromRGB(255, 0, 0) }
+local trackedProjectiles = {}
+local projectilesLoop = nil
+
+local function isValidForProjectiles(obj)
+    if not obj or isBeam(obj) then return false end
+    local n = string.lower(obj.Name or "")
+    if string.find(n, "tripmine") or string.find(n, "trip") or string.find(n, "mine") then return isTripmineWithMesh(obj) end
+    if obj:IsA("Model") then return obj:FindFirstChildWhichIsA("BasePart") ~= nil end
+    return obj:IsA("BasePart")
+end
+
+local function createProjectilesESP(obj)
+    if trackedProjectiles[obj] then return end
+    if not isValidForProjectiles(obj) then return end
+    local ap = getAttachPart(obj)
+    if not ap then return end
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ESP_Projectiles"
+    bb.Size = UDim2.new(0, 200, 0, 30)
+    bb.AlwaysOnTop = true
+    bb.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset, 0)
+    bb.Enabled = ProjectilesConfig.ESPEnabled
+    bb.Parent = ap
+    local lb = Instance.new("TextLabel")
+    lb.Size = UDim2.new(1, 0, 1, 0)
+    lb.BackgroundTransparency = 1
+    lb.Text = obj.Name
+    lb.TextColor3 = ProjectilesConfig.Color
+    lb.TextSize = GlobalConfig.TextSize
+    lb.Font = Enum.Font.SourceSansBold
+    lb.TextStrokeTransparency = 0.3
+    lb.TextXAlignment = Enum.TextXAlignment.Center
+    lb.Parent = bb
+    trackedProjectiles[obj] = {billboard = bb, label = lb}
+end
+
+local function removeProjectilesESP(obj)
+    local d = trackedProjectiles[obj]
+    if d then pcall(function() d.billboard:Destroy() end) trackedProjectiles[obj] = nil end
+end
+
+local function updateProjectilesColor()
+    for _, d in pairs(trackedProjectiles) do pcall(function() d.label.TextColor3 = ProjectilesConfig.Color end) end
+end
+
+local function updateProjectilesSettings()
+    for _, d in pairs(trackedProjectiles) do pcall(function()
+        d.billboard.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset, 0)
+        d.billboard.Enabled = ProjectilesConfig.ESPEnabled
+        d.label.TextSize = GlobalConfig.TextSize
+        d.label.TextColor3 = ProjectilesConfig.Color
+    end) end
+end
+
+local function scanProjectiles()
+    if not ProjectilesConfig.ESPEnabled then
+        for _, d in pairs(trackedProjectiles) do pcall(function() d.billboard.Enabled = false end) end
+        return
+    end
+    local folder = workspace:FindFirstChild("Projectiles")
+    if not folder then for o in pairs(trackedProjectiles) do removeProjectilesESP(o) end return end
+    local cur = {}
+    for _, o in ipairs(folder:GetChildren()) do if isValidForProjectiles(o) then cur[o] = true end end
+    for o in pairs(cur) do if not trackedProjectiles[o] then createProjectilesESP(o) end end
+    for o in pairs(trackedProjectiles) do if not cur[o] then removeProjectilesESP(o) end end
+end
+
+local function startProjectiles() if not projectilesLoop then projectilesLoop = RunService.RenderStepped:Connect(scanProjectiles) scanProjectiles() end end
+local function stopProjectiles() if projectilesLoop then projectilesLoop:Disconnect() projectilesLoop = nil end for o in pairs(trackedProjectiles) do removeProjectilesESP(o) end end
+
+-- ========== EXCALIBUR ==========
+local ExcaliburConfig = { ESPEnabled = false, AutoTeleport = false }
+local trackedExcaliburSpot = nil
+local excaliburLoop = nil
+local autoTeleportLoop = nil
+
+local function getExcaliburSpot()
+    local ss = workspace:FindFirstChild("SwordSpot")
+    if ss then local v = ss:FindFirstChild("Visual") if v and v:IsA("BasePart") then return v end end
+    return nil
+end
+
+local function getExcaliburPrompt()
+    local ss = workspace:FindFirstChild("SwordSpot")
+    if ss then local pp = ss:FindFirstChild("PromptPart") if pp then local p = pp:FindFirstChild("Prompt") if p and p:IsA("ProximityPrompt") then return p end end end
+    return nil
+end
+
+local function fireExcaliburPrompt()
+    local p = getExcaliburPrompt()
+    if not p then return false end
+    if pcall(function() if fireproximityprompt then fireproximityprompt(p) end end) then return true end
+    if pcall(function() p:Fire() end) then return true end
+    return pcall(function() p:InputHoldBegin() task.wait(0.05) p:InputHoldEnd() end)
+end
+
+local function teleportAndFireExcalibur()
+    local spot = getExcaliburSpot()
+    if not spot then return false end
+    local c = LocalPlayer.Character
+    if not c then return false end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    hrp.CFrame = CFrame.new(spot.Position + Vector3.new(0, 3, 0))
+    task.wait(0.1)
+    fireExcaliburPrompt()
+    return true
+end
+
+local function startAutoTeleportAndPull()
+    if autoTeleportLoop then return end
+    autoTeleportLoop = task.spawn(function()
+        while ExcaliburConfig.AutoTeleport and ExcaliburConfig.ESPEnabled do
+            pcall(teleportAndFireExcalibur)
+            task.wait(0.3)
+        end
+    end)
+end
+
+local function stopAutoTeleportAndPull()
+    if autoTeleportLoop then task.cancel(autoTeleportLoop) autoTeleportLoop = nil end
+end
+
+local function scanExcaliburSpot()
+    local spot = getExcaliburSpot()
+    if not ExcaliburConfig.ESPEnabled or not spot then
+        if trackedExcaliburSpot then pcall(function() trackedExcaliburSpot:Destroy() end) trackedExcaliburSpot = nil end
+        return
+    end
+    if not trackedExcaliburSpot then
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "ESP_Excalibur"
+        bb.Size = UDim2.new(0, 300, 0, 40)
+        bb.AlwaysOnTop = true
+        bb.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset + 1, 0)
+        bb.Enabled = true
+        bb.Parent = spot
+        local lb = Instance.new("TextLabel")
+        lb.Size = UDim2.new(1, 0, 1, 0)
+        lb.BackgroundTransparency = 1
+        lb.Text = "EXCALIBUR [IN SPOT]"
+        lb.TextColor3 = Color3.fromRGB(255, 215, 0)
+        lb.TextSize = GlobalConfig.TextSize + 1
+        lb.Font = Enum.Font.SourceSansBold
+        lb.TextStrokeTransparency = 0.3
+        lb.TextXAlignment = Enum.TextXAlignment.Center
+        lb.Parent = bb
+        trackedExcaliburSpot = bb
+    else
+        pcall(function()
+            trackedExcaliburSpot.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset + 1, 0)
+            local lb = trackedExcaliburSpot:FindFirstChildOfClass("TextLabel")
+            if lb then lb.TextSize = GlobalConfig.TextSize + 1 end
+        end)
+    end
+end
+
+local function startExcalibur() if not excaliburLoop then excaliburLoop = RunService.RenderStepped:Connect(scanExcaliburSpot) scanExcaliburSpot() if ExcaliburConfig.AutoTeleport then startAutoTeleportAndPull() end end end
+local function stopExcalibur() if excaliburLoop then excaliburLoop:Disconnect() excaliburLoop = nil end stopAutoTeleportAndPull() if trackedExcaliburSpot then pcall(function() trackedExcaliburSpot:Destroy() end) trackedExcaliburSpot = nil end end
+
+-- ========== PLAYER ESP ==========
+local PlayerESPConfig = {
+    Enabled = false,
+    NormalColor = Color3.fromRGB(255, 255, 255),
+    ExcaliburHeldColor = Color3.fromRGB(255, 50, 50),
+    ExcaliburBackpackColor = Color3.fromRGB(255, 165, 0),
+    MurderColor = Color3.fromRGB(255, 0, 0),
+    SheriffColor = Color3.fromRGB(0, 100, 255),
+    Tracer = false,
+    TracerThickness = 1,
+    Highlight = false,
+    HighlightFillTransparency = 0.5,
+    Distance = false,
+    Box2D = false,
+    Box2DThickness = 1,
+    Box3D = false,
+    Box3DTransparency = 0.5
+}
+local trackedPlayerESP = {}
+local playerESPLoop = nil
+
+local function hasExcaliburTool(player)
+    if not player or player == LocalPlayer then return nil end
+    local ch = player.Character
+    if ch and ch:FindFirstChild("Excalibur") then return "held" end
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp and bp:FindFirstChild("Excalibur") then return "backpack" end
+    return nil
+end
+
+local function isMurder(player)
+    if not player or player == LocalPlayer then return false end
+    local ch = player.Character
+    if ch and ch:FindFirstChild("Knife") then return true end
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp and bp:FindFirstChild("Knife") then return true end
+    return false
+end
+
+local function isSheriff(player)
+    if not player or player == LocalPlayer then return false end
+    local cw = workspace:FindFirstChild(player.Name)
+    if cw and cw:FindFirstChild("Revolver") then return true end
+    local ch = player.Character
+    if ch and ch:FindFirstChild("Revolver") then return true end
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp and bp:FindFirstChild("Revolver") then return true end
+    return false
+end
+
+local function getPlayerRole(player)
+    local e = hasExcaliburTool(player)
+    if e then return "excalibur_" .. e end
+    if isMurder(player) then return "murder" end
+    if isSheriff(player) then return "sheriff" end
+    return "normal"
+end
+
+local function getRoleText(role, name)
+    if role == "excalibur_held" then return name .. " [EXCALIBUR HELD]" end
+    if role == "excalibur_backpack" then return name .. " [EXCALIBUR BAG]" end
+    if role == "murder" then return name .. " [MURDER]" end
+    if role == "sheriff" then return name .. " [SHERIFF]" end
+    return name
+end
+
+local function getRoleColor(role)
+    if role == "excalibur_held" then return PlayerESPConfig.ExcaliburHeldColor end
+    if role == "excalibur_backpack" then return PlayerESPConfig.ExcaliburBackpackColor end
+    if role == "murder" then return PlayerESPConfig.MurderColor end
+    if role == "sheriff" then return PlayerESPConfig.SheriffColor end
+    return PlayerESPConfig.NormalColor
+end
+
+local function isAnyVisualEnabled()
+    return PlayerESPConfig.Tracer or PlayerESPConfig.Highlight or PlayerESPConfig.Distance or PlayerESPConfig.Box2D or PlayerESPConfig.Box3D
+end
+
+local function createPlayerESP(player)
+    if trackedPlayerESP[player] then return end
+    local ch = player.Character
+    if not ch then return end
+    local head = ch:FindFirstChild("Head")
+    if not head then return end
+    local hrp = ch:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local role = getPlayerRole(player)
+    local color = getRoleColor(role)
+    local data = { currentRole = role, head = head, hrp = hrp, char = ch }
+    data.billboard = Instance.new("BillboardGui")
+    data.billboard.Name = "ESP_Player"
+    data.billboard.Size = UDim2.new(0, 300, 0, 40)
+    data.billboard.AlwaysOnTop = true
+    data.billboard.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset + 1, 0)
+    data.billboard.Enabled = PlayerESPConfig.Enabled
+    data.billboard.Parent = head
+    data.nameLabel = Instance.new("TextLabel")
+    data.nameLabel.Size = UDim2.new(1, 0, 1, 0)
+    data.nameLabel.BackgroundTransparency = 1
+    data.nameLabel.Text = getRoleText(role, player.Name)
+    data.nameLabel.TextColor3 = color
+    data.nameLabel.TextSize = GlobalConfig.TextSize + 1
+    data.nameLabel.Font = Enum.Font.SourceSansBold
+    data.nameLabel.TextStrokeTransparency = 0.3
+    data.nameLabel.TextXAlignment = Enum.TextXAlignment.Center
+    data.nameLabel.Parent = data.billboard
+    if HasDrawing then
+        pcall(function()
+            data.tracer = Drawing.new("Line")
+            data.tracer.Thickness = PlayerESPConfig.TracerThickness
+            data.tracer.Transparency = 1
+            data.tracer.Visible = false
+            data.tracer.Color = color
+        end)
+        pcall(function()
+            data.distText = Drawing.new("Text")
+            data.distText.Size = 14
+            data.distText.Center = true
+            data.distText.Outline = true
+            data.distText.OutlineColor = Color3.new(0, 0, 0)
+            data.distText.Color = color
+            data.distText.Visible = false
+            data.distText.Font = 2
+        end)
+        pcall(function()
+            data.box2d = Drawing.new("Square")
+            data.box2d.Thickness = PlayerESPConfig.Box2DThickness
+            data.box2d.Transparency = 1
+            data.box2d.Filled = false
+            data.box2d.Color = color
+            data.box2d.Visible = false
+        end)
+    end
+    data.highlight = Instance.new("Highlight")
+    data.highlight.FillTransparency = PlayerESPConfig.HighlightFillTransparency
+    data.highlight.OutlineTransparency = 0
+    data.highlight.FillColor = color
+    data.highlight.OutlineColor = Color3.new(0, 0, 0)
+    data.highlight.Enabled = false
+    data.highlight.Parent = ch
+    data.box3d = Instance.new("SelectionBox")
+    data.box3d.Adornee = hrp
+    data.box3d.Color3 = color
+    data.box3d.LineThickness = 0.05
+    data.box3d.Transparency = PlayerESPConfig.Box3DTransparency
+    data.box3d.Visible = false
+    data.box3d.Parent = ch
+    trackedPlayerESP[player] = data
+end
+
+local function removePlayerESP(player)
+    local d = trackedPlayerESP[player]
+    if d then
+        if d.tracer then pcall(function() d.tracer:Remove() end) end
+        if d.distText then pcall(function() d.distText:Remove() end) end
+        if d.box2d then pcall(function() d.box2d:Remove() end) end
+        if d.highlight then pcall(function() d.highlight:Destroy() end) end
+        if d.box3d then pcall(function() d.box3d:Destroy() end) end
+        if d.billboard then pcall(function() d.billboard:Destroy() end) end
+        trackedPlayerESP[player] = nil
+    end
+end
+
+local function refreshPlayerESPColors()
+    for _, d in pairs(trackedPlayerESP) do
+        local c = getRoleColor(d.currentRole)
+        pcall(function() d.nameLabel.TextColor3 = c end)
+        if d.tracer then pcall(function() d.tracer.Color = c end) end
+        if d.distText then pcall(function() d.distText.Color = c end) end
+        if d.box2d then pcall(function() d.box2d.Color = c end) end
+        if d.highlight then pcall(function() d.highlight.FillColor = c end) end
+        if d.box3d then pcall(function() d.box3d.Color3 = c end) end
+    end
+end
+
+local function updatePlayerESP()
+    local localHrp = LocalPlayer.Character
+    if localHrp then localHrp = localHrp:FindFirstChild("HumanoidRootPart") end
+    local screenSize = Camera.ViewportSize
+    local screenBottom = Vector2.new(screenSize.X / 2, screenSize.Y)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local ch = player.Character
+            local head = nil
+            local hrp = nil
+            if ch then
+                head = ch:FindFirstChild("Head")
+                hrp = ch:FindFirstChild("HumanoidRootPart")
+            end
+            if not ch or not head or not hrp then
+                removePlayerESP(player)
+            else
+                local d = trackedPlayerESP[player]
+                if not d then
+                    if PlayerESPConfig.Enabled or isAnyVisualEnabled() then
+                        createPlayerESP(player)
+                        d = trackedPlayerESP[player]
+                    end
+                end
+                if d then
+                    if d.char ~= ch then
+                        removePlayerESP(player)
+                        createPlayerESP(player)
+                        d = trackedPlayerESP[player]
+                    end
+                    if d then
+                        d.head = head
+                        d.hrp = hrp
+                        d.char = ch
+                        local role = getPlayerRole(player)
+                        local color = getRoleColor(role)
+                        local dist = 0
+                        if localHrp then dist = (localHrp.Position - hrp.Position).Magnitude end
+                        if d.currentRole ~= role then
+                            d.currentRole = role
+                            d.nameLabel.Text = getRoleText(role, player.Name)
+                        end
+                        d.nameLabel.TextColor3 = color
+                        d.billboard.Enabled = PlayerESPConfig.Enabled
+                        d.billboard.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset + 1, 0)
+                        d.nameLabel.TextSize = GlobalConfig.TextSize + 1
+                        local headSP, onScreen = Camera:WorldToScreenPoint(head.Position)
+                        local vis = onScreen and headSP.Z > 0
+                        if d.tracer then
+                            d.tracer.Visible = PlayerESPConfig.Tracer and vis
+                            if PlayerESPConfig.Tracer and vis then
+                                d.tracer.From = screenBottom
+                                d.tracer.To = Vector2.new(headSP.X, headSP.Y)
+                                d.tracer.Color = color
+                                d.tracer.Thickness = PlayerESPConfig.TracerThickness
+                            end
+                        end
+                        if d.distText then
+                            d.distText.Visible = PlayerESPConfig.Distance and vis
+                            if PlayerESPConfig.Distance and vis then
+                                d.distText.Position = Vector2.new(headSP.X, headSP.Y - 25)
+                                d.distText.Text = math.floor(dist) .. "m"
+                                d.distText.Color = color
+                            end
+                        end
+                        if d.box2d then
+                            d.box2d.Visible = PlayerESPConfig.Box2D and vis
+                            if PlayerESPConfig.Box2D and vis then
+                                local size = hrp.Size
+                                local cf = hrp.CFrame
+                                local sx = size.X / 2
+                                local sy = size.Y / 2
+                                local sz = size.Z / 2
+                                local corners = {
+                                    cf * CFrame.new(sx, sy, sz),
+                                    cf * CFrame.new(-sx, sy, sz),
+                                    cf * CFrame.new(sx, -sy, sz),
+                                    cf * CFrame.new(sx, sy, -sz),
+                                    cf * CFrame.new(-sx, -sy, sz),
+                                    cf * CFrame.new(sx, -sy, -sz),
+                                    cf * CFrame.new(-sx, sy, -sz),
+                                    cf * CFrame.new(-sx, -sy, -sz)
+                                }
+                                local minX = math.huge
+                                local minY = math.huge
+                                local maxX = -math.huge
+                                local maxY = -math.huge
+                                for _, c in ipairs(corners) do
+                                    local s, o = Camera:WorldToScreenPoint(c.Position)
+                                    if o then
+                                        if s.X < minX then minX = s.X end
+                                        if s.Y < minY then minY = s.Y end
+                                        if s.X > maxX then maxX = s.X end
+                                        if s.Y > maxY then maxY = s.Y end
+                                    end
+                                end
+                                if maxX > minX and maxY > minY then
+                                    d.box2d.Position = Vector2.new(minX, minY)
+                                    d.box2d.Size = Vector2.new(maxX - minX, maxY - minY)
+                                    d.box2d.Color = color
+                                    d.box2d.Thickness = PlayerESPConfig.Box2DThickness
+                                else
+                                    d.box2d.Visible = false
+                                end
+                            end
+                        end
+                        d.highlight.Enabled = PlayerESPConfig.Highlight
+                        d.highlight.FillColor = color
+                        d.highlight.FillTransparency = PlayerESPConfig.HighlightFillTransparency
+                        d.box3d.Adornee = hrp
+                        d.box3d.Visible = PlayerESPConfig.Box3D
+                        d.box3d.Color3 = color
+                        d.box3d.Transparency = PlayerESPConfig.Box3DTransparency
+                    end
+                end
+            end
+        end
+    end
+    for p in pairs(trackedPlayerESP) do if not Players:FindFirstChild(p.Name) then removePlayerESP(p) end end
+end
+
+local function startPlayerESP() if not playerESPLoop then playerESPLoop = RunService.RenderStepped:Connect(updatePlayerESP) updatePlayerESP() end end
+local function stopPlayerESP() if playerESPLoop then playerESPLoop:Disconnect() playerESPLoop = nil end for p in pairs(trackedPlayerESP) do removePlayerESP(p) end end
+
+-- ========== PLAYER MOVEMENT ==========
+local PlayerConfig = {
+    AutoSprint = false,
+    InfiniteStamina = false,
+    InfiniteStaminaValue = 999999,
+    StaminaRefill = false,
+    StaminaRefillThreshold = 5,
+    SprintBoost = false,
+    SprintBoostPower = 250
+}
+local sprintConnection = nil
+local infiniteStaminaLoop = nil
+local staminaRefillLoop = nil
+local sprintBoostConnection = nil
+local lastJumpTime = 0
+local lastAnnouncedThreshold = nil
+
+local function showStaminaRefillAnnouncement()
+    local ct = PlayerConfig.StaminaRefillThreshold or 5
+    if lastAnnouncedThreshold ~= ct then
+        lastAnnouncedThreshold = ct
+        pcall(function()
+            if Announcement and Announcement.Display then
+                Announcement.Display("Stamina refill at " .. ct, "Malghozali")
+            end
+        end)
+    end
+end
+
+local function startAutoSprint()
+    if sprintConnection then return end
+    sprintConnection = RunService.RenderStepped:Connect(function()
+        if not PlayerConfig.AutoSprint then return end
+        if not SprintModule then return end
+        local c = LocalPlayer.Character
+        if not c then return end
+        local h = c:FindFirstChild("Humanoid")
+        if not h then return end
+        if h.MoveDirection.Magnitude > 0.1 then
+            pcall(function() if SprintModule.Enable then SprintModule.Enable() end end)
+        end
+    end)
+end
+
+local function stopAutoSprint() if sprintConnection then sprintConnection:Disconnect() sprintConnection = nil end end
+
+local function setInfStamina(v)
+    pcall(function()
+        local aux = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Upbolt/Hydroxide/revision/ohaux.lua"))()
+        local t = {[1] = 0, [2] = "DrainRateMulti", [3] = "MaxStamina", [4] = "DestroyDrainer", [5] = "BaseRegen", [6] = "tick"}
+        local cl = aux.searchClosure(ReplicatedStorage.Resources.Client.MovementHandler.Stamina, "DrainStamina", 1, t)
+        if cl then debug.setupvalue(cl, 1, v) end
+    end)
+end
+
+local function startInfLoop()
+    if infiniteStaminaLoop then return end
+    infiniteStaminaLoop = task.spawn(function()
+        while PlayerConfig.InfiniteStamina do
+            setInfStamina(PlayerConfig.InfiniteStaminaValue)
+            task.wait(0.3)
+        end
+    end)
+end
+
+local function stopInfLoop()
+    if infiniteStaminaLoop then task.cancel(infiniteStaminaLoop) infiniteStaminaLoop = nil end
+    setInfStamina(100)
+end
+
+local function startStamRef()
+    if staminaRefillLoop then return end
+    staminaRefillLoop = task.spawn(function()
+        local cd = false
+        while PlayerConfig.StaminaRefill do
+            task.wait(0.01)
+            if StaminaModule and StaminaModule.Get then
+                local cs = StaminaModule.Get()
+                if cs <= (PlayerConfig.StaminaRefillThreshold or 5) and not cd then
+                    cd = true
+                    pcall(function()
+                        if StaminaModule.DrainStamina then StaminaModule.DrainStamina(-100, 0, true) end
+                        if StaminaModule.DestroyDrainer then StaminaModule.DestroyDrainer("BaseDrain") end
+                    end)
+                    task.wait(0.01)
+                    cd = false
+                end
+            end
+        end
+    end)
+end
+
+local function stopStamRef() if staminaRefillLoop then task.cancel(staminaRefillLoop) staminaRefillLoop = nil end end
+
+local function applySprintBoost()
+    if not PlayerConfig.SprintBoost then return end
+    if not SprintModule then return end
+    local c = LocalPlayer.Character
+    if not c then return end
+    local h = c:FindFirstChild("Humanoid")
+    if not h then return end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local is = false
+    pcall(function() if SprintModule.IsSprinting then is = SprintModule.IsSprinting() end end)
+    if is and h.MoveDirection.Magnitude > 0.3 then
+        hrp:ApplyImpulse(h.MoveDirection.Unit * PlayerConfig.SprintBoostPower)
+    end
+end
+
+local function setupSprintBoost()
+    if sprintBoostConnection then return end
+    sprintBoostConnection = RunService.RenderStepped:Connect(function()
+        if not PlayerConfig.SprintBoost then return end
+        local c = LocalPlayer.Character
+        if not c then return end
+        local h = c:FindFirstChild("Humanoid")
+        if not h then return end
+        if h:GetState() == Enum.HumanoidStateType.Jumping then
+            local t = tick()
+            if t - lastJumpTime > 0.3 then lastJumpTime = t applySprintBoost() end
+        end
+    end)
+end
+
+local function stopSprintBoost() if sprintBoostConnection then sprintBoostConnection:Disconnect() sprintBoostConnection = nil end end
+
+local function updatePlayerSettings()
+    if PlayerConfig.AutoSprint then startAutoSprint() else stopAutoSprint() end
+    if PlayerConfig.InfiniteStamina then startInfLoop() else stopInfLoop() end
+    if PlayerConfig.StaminaRefill then startStamRef() else stopStamRef() end
+    if PlayerConfig.SprintBoost then setupSprintBoost() else stopSprintBoost() end
+end
+
+local function updateAllSettings()
+    updatePlaceablesSettings()
+    updateProjectilesSettings()
+    for _, d in pairs(trackedPlayerESP) do pcall(function()
+        d.billboard.StudsOffset = Vector3.new(0, GlobalConfig.VerticalOffset + 1, 0)
+        d.nameLabel.TextSize = GlobalConfig.TextSize + 1
+    end) end
+end
+
+-- ========== FLY SYSTEM ==========
+local FLYING = false
+local flyspeed = 5
+local flyKeyDown = nil
+local flyKeyUp = nil
+
+function getRoot(character)
+    return character and (character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso"))
+end
+
+function pcfly()
+    local plr = Players.LocalPlayer
+    local char = plr.Character or plr.CharacterAdded:Wait()
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        repeat task.wait() until char:FindFirstChildOfClass("Humanoid")
+        humanoid = char:FindFirstChildOfClass("Humanoid")
+    end
+    if flyKeyDown or flyKeyUp then
+        flyKeyDown:Disconnect()
+        flyKeyUp:Disconnect()
+    end
+    local T = getRoot(char)
+    if not T then return end
+    local CONTROL = {F = 0, B = 0, L = 0, R = 0}
+    local lCONTROL = {F = 0, B = 0, L = 0, R = 0}
+    local SPEED = 0
+    
+    local function FLY()
+        FLYING = true
+        local BG = Instance.new('BodyGyro')
+        local BV = Instance.new('BodyVelocity')
+        BG.P = 9e4
+        BG.Parent = T
+        BV.Parent = T
+        BG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+        BG.CFrame = T.CFrame
+        BV.Velocity = Vector3.new(0, 0, 0)
+        BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        
+        task.spawn(function()
+            repeat task.wait()
+                local camera = workspace.CurrentCamera
+                humanoid.PlatformStand = true
+                if CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 then
+                    SPEED = 50
+                elseif not (CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0) and SPEED ~= 0 then
+                    SPEED = 0
+                end
+                if (CONTROL.L + CONTROL.R) ~= 0 or (CONTROL.F + CONTROL.B) ~= 0 then
+                    BV.Velocity = ((camera.CFrame.LookVector * (CONTROL.F + CONTROL.B)) + ((camera.CFrame * CFrame.new(CONTROL.L + CONTROL.R, (CONTROL.F + CONTROL.B) * 0.2, 0).p) - camera.CFrame.p)) * SPEED
+                    lCONTROL = {F = CONTROL.F, B = CONTROL.B, L = CONTROL.L, R = CONTROL.R}
+                elseif (CONTROL.L + CONTROL.R) == 0 and (CONTROL.F + CONTROL.B) == 0 and SPEED ~= 0 then
+                    BV.Velocity = ((camera.CFrame.LookVector * (lCONTROL.F + lCONTROL.B)) + ((camera.CFrame * CFrame.new(lCONTROL.L + lCONTROL.R, (lCONTROL.F + lCONTROL.B) * 0.2, 0).p) - camera.CFrame.p)) * SPEED
+                else
+                    BV.Velocity = Vector3.new(0, 0, 0)
+                end
+                BG.CFrame = camera.CFrame
+            until not FLYING
+            CONTROL = {F = 0, B = 0, L = 0, R = 0}
+            lCONTROL = {F = 0, B = 0, L = 0, R = 0}
+            SPEED = 0
+            BG:Destroy()
+            BV:Destroy()
+            if humanoid then humanoid.PlatformStand = false end
+        end)
+    end
+    
+    flyKeyDown = UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.W then CONTROL.F = flyspeed
+        elseif input.KeyCode == Enum.KeyCode.S then CONTROL.B = -flyspeed
+        elseif input.KeyCode == Enum.KeyCode.A then CONTROL.L = -flyspeed
+        elseif input.KeyCode == Enum.KeyCode.D then CONTROL.R = flyspeed
+        elseif input.KeyCode == Enum.KeyCode.Space then
+            local T2 = getRoot(char)
+            if T2 then T2.Velocity = T2.Velocity + Vector3.new(0, flyspeed * 10, 0) end
+        elseif input.KeyCode == Enum.KeyCode.LeftControl then
+            local T2 = getRoot(char)
+            if T2 then T2.Velocity = T2.Velocity - Vector3.new(0, flyspeed * 10, 0) end
+        end
+        pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Track end)
+    end)
+    
+    flyKeyUp = UserInputService.InputEnded:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.W then CONTROL.F = 0
+        elseif input.KeyCode == Enum.KeyCode.S then CONTROL.B = 0
+        elseif input.KeyCode == Enum.KeyCode.A then CONTROL.L = 0
+        elseif input.KeyCode == Enum.KeyCode.D then CONTROL.R = 0
+        end
+    end)
+    
+    FLY()
+end
+
+function NOFLY()
+    FLYING = false
+    if flyKeyDown then flyKeyDown:Disconnect() flyKeyUp:Disconnect() end
+    if Players.LocalPlayer.Character and Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid') then
+        Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').PlatformStand = false
+    end
+    pcall(function() workspace.CurrentCamera.CameraType = Enum.CameraType.Custom end)
+end
+
+-- ========== FAKE TAB TOGGLE SYSTEM ==========
+local FakeTabState = {
+    Active = false,
+    Frozen = false,
+    Gui = nil,
+    ToggleBtn = nil,
+    IconLabel = nil,
+    StatusLabel = nil,
+    BtnStroke = nil,
+    FreezeConnection = nil,
+    SavedCFrame = nil,
+    IsDragging = false,
+    DragStart = nil,
+    StartPos = nil
+}
+
+local function clampPos(pos, objSize)
+    local vp = workspace.CurrentCamera.ViewportSize
+    return UDim2.new(0, math.clamp(pos.X.Offset, 0, vp.X - objSize.X), 0, math.clamp(pos.Y.Offset, 0, vp.Y - objSize.Y))
+end
+
+local function unfreezeFakeTab()
+    if FakeTabState.FreezeConnection then
+        FakeTabState.FreezeConnection:Disconnect()
+        FakeTabState.FreezeConnection = nil
+    end
+    FakeTabState.Frozen = false
+    FakeTabState.SavedCFrame = nil
+    if FakeTabState.IconLabel then FakeTabState.IconLabel.Text = "\u{23F8}\u{FE0F}" end
+    if FakeTabState.StatusLabel then
+        FakeTabState.StatusLabel.Text = "OFF"
+        FakeTabState.StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+    if FakeTabState.ToggleBtn then FakeTabState.ToggleBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 70) end
+    if FakeTabState.BtnStroke then FakeTabState.BtnStroke.Color = Color3.fromRGB(100, 100, 150) end
+end
+
+local function freezeFakeTab()
+    local character = LocalPlayer.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    FakeTabState.SavedCFrame = hrp.CFrame
+    if FakeTabState.FreezeConnection then FakeTabState.FreezeConnection:Disconnect() end
+    FakeTabState.FreezeConnection = RunService.Heartbeat:Connect(function()
+        local c = LocalPlayer.Character
+        if not c then return end
+        local h = c:FindFirstChild("HumanoidRootPart")
+        if h and FakeTabState.SavedCFrame then
+            h.CFrame = FakeTabState.SavedCFrame
+            h.Velocity = Vector3.new(0, 0, 0)
+            h.RotVelocity = Vector3.new(0, 0, 0)
+        end
+    end)
+    FakeTabState.Frozen = true
+    if FakeTabState.IconLabel then FakeTabState.IconLabel.Text = "\u{25B6}\u{FE0F}" end
+    if FakeTabState.StatusLabel then
+        FakeTabState.StatusLabel.Text = "ON"
+        FakeTabState.StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+    if FakeTabState.ToggleBtn then FakeTabState.ToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 90, 60) end
+    if FakeTabState.BtnStroke then FakeTabState.BtnStroke.Color = Color3.fromRGB(100, 200, 100) end
+    pcall(function()
+        TweenService:Create(FakeTabState.ToggleBtn, TweenInfo.new(0.2, Enum.EasingStyle.Back), {
+            Size = UDim2.new(0, 55, 0, 55)
+        }):Play()
+        task.wait(0.2)
+        TweenService:Create(FakeTabState.ToggleBtn, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(0, 50, 0, 50)
+        }):Play()
+    end)
+end
+
+local function destroyFakeTab()
+    unfreezeFakeTab()
+    if FakeTabState.Gui then pcall(function() FakeTabState.Gui:Destroy() end) end
+    FakeTabState.Active = false
+    FakeTabState.Gui = nil
+    FakeTabState.ToggleBtn = nil
+    FakeTabState.IconLabel = nil
+    FakeTabState.StatusLabel = nil
+    FakeTabState.BtnStroke = nil
+end
+
+local function createFakeTab()
+    if FakeTabState.Active then
+        destroyFakeTab()
+        return
+    end
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FakeTabToggle"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    screenGui.IgnoreGuiInset = true
+    screenGui.DisplayOrder = 999
+
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Name = "ToggleButton"
+    toggleBtn.Size = UDim2.new(0, 50, 0, 50)
+    toggleBtn.Position = UDim2.new(0.5, -25, 0.5, -25)
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 70)
+    toggleBtn.Text = ""
+    toggleBtn.TextSize = 0
+    toggleBtn.AutoButtonColor = false
+    toggleBtn.BorderSizePixel = 0
+    toggleBtn.ZIndex = 10
+    toggleBtn.Parent = screenGui
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(1, 0)
+    btnCorner.Parent = toggleBtn
+
+    local btnStroke = Instance.new("UIStroke")
+    btnStroke.Color = Color3.fromRGB(100, 100, 150)
+    btnStroke.Thickness = 2
+    btnStroke.Transparency = 0.3
+    btnStroke.Parent = toggleBtn
+
+    local iconLabel = Instance.new("TextLabel")
+    iconLabel.Size = UDim2.new(1, 0, 1, 0)
+    iconLabel.BackgroundTransparency = 1
+    iconLabel.Text = "\u{23F8}\u{FE0F}"
+    iconLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    iconLabel.TextSize = 24
+    iconLabel.Font = Enum.Font.SourceSansBold
+    iconLabel.ZIndex = 11
+    iconLabel.Parent = toggleBtn
+
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(0, 60, 0, 20)
+    statusLabel.Position = UDim2.new(0.5, -30, 1, 8)
+    statusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
+    statusLabel.BackgroundTransparency = 0.3
+    statusLabel.BorderSizePixel = 0
+    statusLabel.Text = "OFF"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+    statusLabel.TextSize = 11
+    statusLabel.Font = Enum.Font.GothamBold
+    statusLabel.ZIndex = 11
+    local statusCorner = Instance.new("UICorner")
+    statusCorner.CornerRadius = UDim.new(0, 6)
+    statusCorner.Parent = statusLabel
+    statusLabel.Parent = toggleBtn
+
+    FakeTabState.Gui = screenGui
+    FakeTabState.ToggleBtn = toggleBtn
+    FakeTabState.IconLabel = iconLabel
+    FakeTabState.StatusLabel = statusLabel
+    FakeTabState.BtnStroke = btnStroke
+    FakeTabState.Active = true
+
+    toggleBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            FakeTabState.IsDragging = false
+            FakeTabState.DragStart = input.Position
+            FakeTabState.StartPos = toggleBtn.Position
+        end
+    end)
+
+    toggleBtn.InputChanged:Connect(function(input)
+        if FakeTabState.DragStart and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - FakeTabState.DragStart
+            if delta.Magnitude > 5 then
+                FakeTabState.IsDragging = true
+                local newPos = UDim2.new(0, FakeTabState.StartPos.X.Offset + delta.X, 0, FakeTabState.StartPos.Y.Offset + delta.Y)
+                toggleBtn.Position = clampPos(newPos, toggleBtn.AbsoluteSize)
+            end
+        end
+    end)
+
+    toggleBtn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if not FakeTabState.IsDragging then
+                if FakeTabState.Frozen then unfreezeFakeTab() else freezeFakeTab() end
+            end
+            FakeTabState.IsDragging = false
+            FakeTabState.DragStart = nil
+        end
+    end)
+
+    task.wait(0.1)
+    toggleBtn.Position = UDim2.new(0.5, -toggleBtn.AbsoluteSize.X / 2, 0.5, -toggleBtn.AbsoluteSize.Y / 2)
+end
+
+-- ========== AUTO REJOIN SYSTEM ==========
+local AutoRejoinConfig = {
+    Enabled = false,
+    HealthThreshold = 10
+}
+local autoRejoinConnection = nil
+
+local function doRejoin()
+    pcall(function()
+        LocalPlayer:Kick("Low Health - Auto Rejoin")
+        task.wait(0.1)
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+    end)
+end
+
+local function setupHealthCheck()
+    if autoRejoinConnection then
+        autoRejoinConnection:Disconnect()
+        autoRejoinConnection = nil
+    end
+    if not AutoRejoinConfig.Enabled then return end
+    local character = LocalPlayer.Character
+    if not character then return end
+    local hum = character:FindFirstChild("Humanoid")
+    if not hum then return end
+    if hum.Health < AutoRejoinConfig.HealthThreshold and hum.Health > 0 then
+        doRejoin()
+        return
+    end
+    autoRejoinConnection = hum.HealthChanged:Connect(function(health)
+        if AutoRejoinConfig.Enabled and health < AutoRejoinConfig.HealthThreshold and health > 0 then
+            doRejoin()
+        end
+    end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    setupHealthCheck()
+    if FLYING then NOFLY() end
+    if FakeTabState.Frozen then unfreezeFakeTab() end
+end)
+
+-- ========== UI TABS ==========
+local Tabs = {
+    Main = Window:Tab({ Title = "Placeables" }),
+    Projectiles = Window:Tab({ Title = "Projectiles" }),
+    Excalibur = Window:Tab({ Title = "Excalibur" }),
+    PlayerESP = Window:Tab({ Title = "Player ESP" }),
+    Player = Window:Tab({ Title = "Player" }),
+    Settings = Window:Tab({ Title = "Settings" }),
+    Utility = Window:Tab({ Title = "Utilities" })
+}
+
+-- ========== PLACEABLES TAB ==========
+Tabs.Main:Section({ Title = "Placeables ESP", TextSize = 20 })
+Tabs.Main:Divider()
+
+Tabs.Main:Toggle({
+    Title = "Enable ESP Placeables",
+    Default = false,
+    Callback = function(s) PlaceablesConfig.ESPEnabled = s if s then startPlaceables() else stopPlaceables() end end
+})
+
+Tabs.Main:Section({ Title = "Colors", TextSize = 16 })
+
+Tabs.Main:Button({ Title = "Green", Callback = function() PlaceablesConfig.Color = Color3.fromRGB(0, 255, 0) updatePlaceablesColor() end })
+Tabs.Main:Button({ Title = "Red", Callback = function() PlaceablesConfig.Color = Color3.fromRGB(255, 0, 0) updatePlaceablesColor() end })
+Tabs.Main:Button({ Title = "Blue", Callback = function() PlaceablesConfig.Color = Color3.fromRGB(0, 100, 255) updatePlaceablesColor() end })
+Tabs.Main:Button({ Title = "Yellow", Callback = function() PlaceablesConfig.Color = Color3.fromRGB(255, 255, 0) updatePlaceablesColor() end })
+Tabs.Main:Button({ Title = "Cyan", Callback = function() PlaceablesConfig.Color = Color3.fromRGB(0, 255, 255) updatePlaceablesColor() end })
+Tabs.Main:Button({ Title = "Purple", Callback = function() PlaceablesConfig.Color = Color3.fromRGB(160, 32, 240) updatePlaceablesColor() end })
+
+Tabs.Main:Divider()
+Tabs.Main:Paragraph({
+    Title = "Warning",
+    Description = "This ESP only works on objects that have already been placed on the map. It will not detect items still in inventories or being held by players."
+})
+
+-- ========== PROJECTILES TAB ==========
+Tabs.Projectiles:Section({ Title = "Projectiles ESP", TextSize = 20 })
+Tabs.Projectiles:Divider()
+
+Tabs.Projectiles:Toggle({
+    Title = "Enable ESP Projectiles",
+    Default = false,
+    Callback = function(s) ProjectilesConfig.ESPEnabled = s if s then startProjectiles() else stopProjectiles() end end
+})
+
+Tabs.Projectiles:Section({ Title = "Colors", TextSize = 16 })
+
+Tabs.Projectiles:Button({ Title = "Red", Callback = function() ProjectilesConfig.Color = Color3.fromRGB(255, 0, 0) updateProjectilesColor() end })
+Tabs.Projectiles:Button({ Title = "Green", Callback = function() ProjectilesConfig.Color = Color3.fromRGB(0, 255, 0) updateProjectilesColor() end })
+Tabs.Projectiles:Button({ Title = "Blue", Callback = function() ProjectilesConfig.Color = Color3.fromRGB(0, 100, 255) updateProjectilesColor() end })
+Tabs.Projectiles:Button({ Title = "Yellow", Callback = function() ProjectilesConfig.Color = Color3.fromRGB(255, 255, 0) updateProjectilesColor() end })
+Tabs.Projectiles:Button({ Title = "Cyan", Callback = function() ProjectilesConfig.Color = Color3.fromRGB(0, 255, 255) updateProjectilesColor() end })
+Tabs.Projectiles:Button({ Title = "Purple", Callback = function() ProjectilesConfig.Color = Color3.fromRGB(160, 32, 240) updateProjectilesColor() end })
+
+Tabs.Projectiles:Divider()
+Tabs.Projectiles:Paragraph({
+    Title = "Warning",
+    Description = "This ESP affects all valid objects in the Projectiles folder, not just physical items or specific objects. It may also detect other entities such as abilities or effects."
+})
+
+-- ========== EXCALIBUR TAB ==========
+Tabs.Excalibur:Section({ Title = "Excalibur", TextSize = 20 })
+Tabs.Excalibur:Divider()
+
+Tabs.Excalibur:Toggle({
+    Title = "Enable ESP Excalibur (SwordSpot)",
+    Default = false,
+    Callback = function(s) ExcaliburConfig.ESPEnabled = s if s then startExcalibur() else stopExcalibur() end end
+})
+
+Tabs.Excalibur:Toggle({
+    Title = "Auto Teleport + Pull",
+    Default = false,
+    Callback = function(s)
+        ExcaliburConfig.AutoTeleport = s
+        if s and ExcaliburConfig.ESPEnabled then startAutoTeleportAndPull() else stopAutoTeleportAndPull() end
+    end
+})
+
+Tabs.Excalibur:Button({
+    Title = "Teleport to SwordSpot",
+    Callback = function() pcall(teleportAndFireExcalibur) end
+})
+
+Tabs.Excalibur:Divider()
+Tabs.Excalibur:Paragraph({
+    Title = "Warning",
+    Description = "Auto Teleport will repeatedly teleport you to the SwordSpot and attempt to pull the sword. This may be noticeable to other players. Use with caution."
+})
+
+-- ========== PLAYER ESP TAB ==========
+Tabs.PlayerESP:Section({ Title = "Player ESP", TextSize = 20 })
+Tabs.PlayerESP:Divider()
+
+Tabs.PlayerESP:Toggle({
+    Title = "Enable Name ESP",
+    Default = false,
+    Callback = function(s)
+        PlayerESPConfig.Enabled = s
+        if s or isAnyVisualEnabled() then startPlayerESP()
+        elseif not isAnyVisualEnabled() then stopPlayerESP() end
+    end
+})
+
+Tabs.PlayerESP:Section({ Title = "Colors", TextSize = 16 })
+
+Tabs.PlayerESP:Colorpicker({ Title = "Normal", Default = PlayerESPConfig.NormalColor, Callback = function(c) PlayerESPConfig.NormalColor = c refreshPlayerESPColors() end })
+Tabs.PlayerESP:Colorpicker({ Title = "Excalibur [HELD]", Default = PlayerESPConfig.ExcaliburHeldColor, Callback = function(c) PlayerESPConfig.ExcaliburHeldColor = c refreshPlayerESPColors() end })
+Tabs.PlayerESP:Colorpicker({ Title = "Excalibur [BAG]", Default = PlayerESPConfig.ExcaliburBackpackColor, Callback = function(c) PlayerESPConfig.ExcaliburBackpackColor = c refreshPlayerESPColors() end })
+Tabs.PlayerESP:Colorpicker({ Title = "Murder", Default = PlayerESPConfig.MurderColor, Callback = function(c) PlayerESPConfig.MurderColor = c refreshPlayerESPColors() end })
+Tabs.PlayerESP:Colorpicker({ Title = "Sheriff", Default = PlayerESPConfig.SheriffColor, Callback = function(c) PlayerESPConfig.SheriffColor = c refreshPlayerESPColors() end })
+
+Tabs.PlayerESP:Section({ Title = "Visuals", TextSize = 16 })
+
+Tabs.PlayerESP:Toggle({
+    Title = "Tracer", Default = false,
+    Callback = function(s) PlayerESPConfig.Tracer = s if s or PlayerESPConfig.Enabled or isAnyVisualEnabled() then startPlayerESP() elseif not isAnyVisualEnabled() then stopPlayerESP() end end
+})
+Tabs.PlayerESP:Slider({ Title = "Tracer Thickness", Min = 1, Max = 5, Default = PlayerESPConfig.TracerThickness, Step = 0.5, Callback = function(v) PlayerESPConfig.TracerThickness = v end })
+
+Tabs.PlayerESP:Toggle({
+    Title = "Highlight", Default = false,
+    Callback = function(s) PlayerESPConfig.Highlight = s if s or PlayerESPConfig.Enabled or isAnyVisualEnabled() then startPlayerESP() elseif not isAnyVisualEnabled() then stopPlayerESP() end end
+})
+Tabs.PlayerESP:Slider({ Title = "Highlight Transparency", Min = 0, Max = 1, Default = PlayerESPConfig.HighlightFillTransparency, Step = 0.05, Callback = function(v) PlayerESPConfig.HighlightFillTransparency = v end })
+
+Tabs.PlayerESP:Toggle({
+    Title = "Distance", Default = false,
+    Callback = function(s) PlayerESPConfig.Distance = s if s or PlayerESPConfig.Enabled or isAnyVisualEnabled() then startPlayerESP() elseif not isAnyVisualEnabled() then stopPlayerESP() end end
+})
+
+Tabs.PlayerESP:Toggle({
+    Title = "Box 2D", Default = false,
+    Callback = function(s) PlayerESPConfig.Box2D = s if s or PlayerESPConfig.Enabled or isAnyVisualEnabled() then startPlayerESP() elseif not isAnyVisualEnabled() then stopPlayerESP() end end
+})
+Tabs.PlayerESP:Slider({ Title = "Box 2D Thickness", Min = 1, Max = 5, Default = PlayerESPConfig.Box2DThickness, Step = 0.5, Callback = function(v) PlayerESPConfig.Box2DThickness = v end })
+
+Tabs.PlayerESP:Toggle({
+    Title = "Box 3D", Default = false,
+    Callback = function(s) PlayerESPConfig.Box3D = s if s or PlayerESPConfig.Enabled or isAnyVisualEnabled() then startPlayerESP() elseif not isAnyVisualEnabled() then stopPlayerESP() end end
+})
+Tabs.PlayerESP:Slider({ Title = "Box 3D Transparency", Min = 0, Max = 1, Default = PlayerESPConfig.Box3DTransparency, Step = 0.05, Callback = function(v) PlayerESPConfig.Box3DTransparency = v end })
+
+Tabs.PlayerESP:Divider()
+Tabs.PlayerESP:Paragraph({
+    Title = "Info",
+    Description = "Enabling multiple visual options at once (Tracer + Box 2D + Box 3D + Highlight) may impact performance on lower-end devices. Box 2D and Tracer require Drawing library support."
+})
+
+-- ========== PLAYER TAB ==========
+Tabs.Player:Section({ Title = "Movement", TextSize = 20 })
+Tabs.Player:Divider()
+
+Tabs.Player:Toggle({ Title = "Auto Sprint", Default = false, Callback = function(s) PlayerConfig.AutoSprint = s updatePlayerSettings() end })
+
+Tabs.Player:Input({ Title = "Infinite Stamina Value", Placeholder = "999999", Default = "999999", NumbersOnly = true, Callback = function(v) local n = tonumber(v) if n and n > 0 then PlayerConfig.InfiniteStaminaValue = n end end })
+Tabs.Player:Toggle({ Title = "Enable Infinite Stamina (Loop)", Default = false, Callback = function(s) PlayerConfig.InfiniteStamina = s updatePlayerSettings() end })
+
+Tabs.Player:Input({ Title = "Stamina Refill Threshold", Placeholder = "5", Default = "5", NumbersOnly = true, Callback = function(v) local n = tonumber(v) if n and n >= 0 then local o = PlayerConfig.StaminaRefillThreshold PlayerConfig.StaminaRefillThreshold = n if o ~= n then lastAnnouncedThreshold = nil if PlayerConfig.StaminaRefill then showStaminaRefillAnnouncement() end end end end })
+Tabs.Player:Toggle({ Title = "Enable Stamina Refill", Default = false, Callback = function(s) local w = PlayerConfig.StaminaRefill PlayerConfig.StaminaRefill = s updatePlayerSettings() if s and not w then showStaminaRefillAnnouncement() end end })
+
+Tabs.Player:Input({ Title = "Sprint Boost Power", Placeholder = "250", Default = "250", NumbersOnly = true, Callback = function(v) local n = tonumber(v) if n and n > 0 then PlayerConfig.SprintBoostPower = n end end })
+Tabs.Player:Toggle({ Title = "Enable Sprint Boost", Default = false, Callback = function(s) PlayerConfig.SprintBoost = s updatePlayerSettings() end })
+
+Tabs.Player:Divider()
+Tabs.Player:Section({ Title = "Fly", TextSize = 20 })
+Tabs.Player:Divider()
+
+Tabs.Player:Toggle({ Title = "Fly", Default = false, Callback = function(s) if s then pcfly() else NOFLY() end end })
+Tabs.Player:Input({ Title = "Fly Speed", Placeholder = "5", Default = "5", NumbersOnly = true, Callback = function(v) local n = tonumber(v) if n and n > 0 then flyspeed = n end end })
+Tabs.Player:Paragraph({ Title = "Controls", Description = "WASD - Move | Space - Up | LeftCtrl - Down" })
+
+Tabs.Player:Divider()
+Tabs.Player:Paragraph({
+    Title = "Warning",
+    Description = "Infinite Stamina and Stamina Refill use memory manipulation via Hydroxide. If one method stops working, try the other. Sprint Boost applies impulse during jumps. Fly disables on respawn automatically."
+})
+
+-- ========== SETTINGS TAB ==========
+Tabs.Settings:Section({ Title = "ESP Settings", TextSize = 20 })
+Tabs.Settings:Divider()
+
+Tabs.Settings:Input({ Title = "Text Size", Placeholder = "11", Default = "11", NumbersOnly = true, Callback = function(v) local n = tonumber(v) if n and n >= 8 and n <= 20 then GlobalConfig.TextSize = n updateAllSettings() end end })
+Tabs.Settings:Slider({ Title = "Vertical Offset", Min = 0, Max = 10, Default = GlobalConfig.VerticalOffset, Step = 0.5, Callback = function(v) GlobalConfig.VerticalOffset = v updateAllSettings() end })
+
+Tabs.Settings:Divider()
+Tabs.Settings:Paragraph({
+    Title = "Info",
+    Description = "Text Size controls the font size of all ESP labels (range 8-20). Vertical Offset controls how high above the object the ESP text floats (range 0-10). Changes apply to all active ESPs in real-time."
+})
+
+-- ========== UTILITIES TAB ==========
+Tabs.Utility:Section({ Title = "Fake Tab", TextSize = 20 })
+Tabs.Utility:Divider()
+
+Tabs.Utility:Button({
+    Title = "Toggle Fake Tab GUI",
+    Callback = function() createFakeTab() end
+})
+
+Tabs.Utility:Paragraph({
+    Title = "Info",
+    Description = "Click once to spawn the floating button. Click the button to freeze your character in place. Drag to move it around. Click again to unfreeze. Click the button here again to remove it entirely."
+})
+
+Tabs.Utility:Divider()
+Tabs.Utility:Section({ Title = "Auto Rejoin", TextSize = 20 })
+Tabs.Utility:Divider()
+
+Tabs.Utility:Input({
+    Title = "Health Threshold",
+    Placeholder = "10",
+    Default = "10",
+    NumbersOnly = true,
+    Callback = function(v)
+        local n = tonumber(v)
+        if n and n > 0 then
+            AutoRejoinConfig.HealthThreshold = n
+            if AutoRejoinConfig.Enabled then setupHealthCheck() end
+        end
+    end
+})
+
+Tabs.Utility:Toggle({
+    Title = "Enable Auto Rejoin",
+    Default = false,
+    Callback = function(s)
+        AutoRejoinConfig.Enabled = s
+        if s then setupHealthCheck()
+        else
+            if autoRejoinConnection then autoRejoinConnection:Disconnect() autoRejoinConnection = nil end
+        end
+    end
+})
+
+Tabs.Utility:Paragraph({
+    Title = "Info",
+    Description = "When enabled, you will automatically be kicked and rejoined to the same server if your health drops below the set threshold. Increase the threshold value to rejoin earlier and stay safer."
+})
+
+-- ========== INITIALIZATION ==========
+task.spawn(function()
+    loadModules()
+    WindUI:Notify({
+        Title = "S.E.W.H",
+        Content = "Loaded Successfully",
+        Duration = 3
+    })
+end)
